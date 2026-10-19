@@ -1,25 +1,19 @@
 """Agents that explore datasets and guide research questions."""
 
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-import httpx
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 
-DATA_EXPLORER_SYSTEM_PROMPT = """\
-You explore datasets to help a researcher decide what is worth studying next.
-
-Inspect structure before drawing conclusions: schemas, row counts, missingness, \
-and a small sample of values. State what the data supports, what it does not, \
-and which follow-up questions are still open. Prefer a short, concrete finding \
-over a broad summary.
-"""
+from data_explorer_agents.prompts import DATA_EXPLORER_SYSTEM_PROMPT
 
 type Tool = BaseTool | Callable[..., Any] | dict[str, Any]
 
@@ -125,26 +119,68 @@ def _rows(raw: object) -> list[dict[str, Any]]:
     return rows
 
 
+def _tool_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return ""
+
+
+def _pass_through(result: object) -> dict[str, Any]:
+    """Read the MCP tool result without changing its payload."""
+    if isinstance(result, tuple):
+        content = result[0] if result else None
+        artifact = result[1] if len(result) > 1 else None
+        if isinstance(artifact, dict):
+            structured = artifact.get("structured_content")
+            if isinstance(structured, dict):
+                return structured
+        result = content
+    try:
+        payload = json.loads(_tool_text(result))
+    except json.JSONDecodeError as exc:
+        raise ExplorerError("database returned a non-object") from exc
+    if not isinstance(payload, dict):
+        raise ExplorerError("database returned a non-object")
+    return payload
+
+
 async def run_query(
     state: ExplorerState, runtime: Runtime[ExplorerContext]
 ) -> dict[str, Any]:
-    """Run the query by calling the database.
+    """Run the query by calling the database MCP ``query`` tool.
 
-    This stands in for an agent calling an MCP server that runs the query.
+    The tool result is passed through as the rows and the path.
     """
-    url = f"{runtime.context.database_url.rstrip('/')}/query"
+    url = f"{runtime.context.database_url.rstrip('/')}/mcp/"
+    client = MultiServerMCPClient(
+        {
+            "database": {
+                "transport": "streamable_http",
+                "url": url,
+            }
+        }
+    )
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url,
-                json={"question": state["query"], "path": state["path"]},
-            )
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
+        tools = await client.get_tools(server_name="database")
+        query_tool = next((tool for tool in tools if tool.name == "query"), None)
+        if query_tool is None:
+            raise ExplorerError("database call failed: query tool is not available")
+        result = await query_tool.ainvoke(
+            {"question": state["query"], "path": state["path"]}
+        )
+    except ExplorerError:
+        raise
+    except Exception as exc:
         raise ExplorerError(f"database call failed: {exc}") from exc
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise ExplorerError("database returned a non-object")
+    payload = _pass_through(result)
     raw_path = payload.get("path", state["path"])
     path = raw_path if isinstance(raw_path, list) else state["path"]
     return {"rows": _rows(payload.get("rows")), "path": path}

@@ -1,7 +1,7 @@
 """AI server.
 
 Accepts a question from the backend and runs the data explorer graph.
-The graph reads the question, writes a query, asks the database for rows,
+The graph reads the question, writes a query, calls the database MCP tool,
 and returns a result string.
 Run from the repo root:
 

@@ -1,6 +1,7 @@
 """In-memory dataset service.
 
-The AI server sends a question here and receives matching rows.
+The catalog is available as ``POST /query`` and as an MCP tool named ``query``
+at ``/mcp``. Both return the same rows.
 Run from the repo root:
 
     uv run python -m data_explorer_agents.database.app
@@ -11,10 +12,15 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, field_validator
+
+from data_explorer_agents.prompts import DATABASE_MCP_INSTRUCTIONS, QUERY_TOOL_DESCRIPTION
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +133,38 @@ def matching_rows(question: str) -> list[DatasetRow]:
     ]
 
 
-app = FastAPI(title="Database", version="0.1.0")
+def execute_query(question: str, path: list[str]) -> QueryResponse:
+    """Match rows and append this service to the path."""
+    traveled = [*path, "database"]
+    rows = matching_rows(question)
+    logger.info("query question=%r matches=%s path=%s", question, len(rows), traveled)
+    return QueryResponse(question=question, rows=rows, path=traveled)
+
+
+mcp = FastMCP(
+    "database",
+    instructions=DATABASE_MCP_INSTRUCTIONS,
+    stateless_http=True,
+    json_response=True,
+    streamable_http_path="/",
+)
+
+
+@mcp.tool(name="query", description=QUERY_TOOL_DESCRIPTION)
+def query_datasets(question: str, path: list[str]) -> QueryResponse:
+    return execute_query(question, path)
+
+
+mcp_app = mcp.streamable_http_app()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    async with mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title="Database", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -137,10 +174,10 @@ def health() -> dict[str, str]:
 
 @app.post("/query", response_model=QueryResponse)
 def query(body: QueryRequest) -> QueryResponse:
-    path = [*body.path, "database"]
-    rows = matching_rows(body.question)
-    logger.info("query question=%r matches=%s path=%s", body.question, len(rows), path)
-    return QueryResponse(question=body.question, rows=rows, path=path)
+    return execute_query(body.question, body.path)
+
+
+app.mount("/mcp", mcp_app)
 
 
 def main() -> None:

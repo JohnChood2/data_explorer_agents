@@ -26,9 +26,9 @@ The search bar is the page at `http://127.0.0.1:8000`. You type a question and s
 
 The backend is the app on port 8001. `POST /search` on the backend sends the question to `POST /ask` on the AI server. The backend returns the AI server's result without changing the result text.
 
-The AI server is the app on port 8002. `POST /ask` sends the question to `POST /query` on the database. The AI server then writes one result sentence from the rows the database returned. The AI server is a placeholder for the data explorer agent, and it does not call a language model.
+The AI server is the app on port 8002. `POST /ask` runs the data explorer graph. The graph calls the database MCP tool named `query`. That tool returns the matching rows, and the AI server writes one result sentence from those rows. The AI server does not call a language model.
 
-The database is the app on port 8003. The database keeps three sample datasets in memory.
+The database is the app on port 8003. It keeps three sample datasets in memory, and it exposes them through `POST /query` and through an MCP server at `/mcp`. The MCP tool is named `query`, and it returns the same rows as `POST /query`.
 
 - SDSS galaxies is a galaxy catalog with 120,000 rows.
 - Gaia stars is a catalog of stellar positions with 1,800,000,000 rows.
