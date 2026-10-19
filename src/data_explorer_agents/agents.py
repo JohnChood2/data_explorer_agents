@@ -17,28 +17,6 @@ from data_explorer_agents.prompts import DATA_EXPLORER_SYSTEM_PROMPT
 
 type Tool = BaseTool | Callable[..., Any] | dict[str, Any]
 
-
-def create_data_explorer_agent(
-    model: str | BaseChatModel,
-    tools: Sequence[Tool] | None = None,
-    *,
-    system_prompt: str = DATA_EXPLORER_SYSTEM_PROMPT,
-    name: str = "data_explorer",
-) -> CompiledStateGraph:
-    """Build a tool-calling agent for exploring a dataset.
-
-    ``model`` is a LangChain chat model or a provider string such as
-    ``"openai:gpt-5.5"``. ``tools`` are the operations the agent may call
-    while inspecting the data.
-    """
-    return create_agent(
-        model,
-        tools=list(tools) if tools else None,
-        system_prompt=system_prompt,
-        name=name,
-    )
-
-
 # Context the query-writing step will hand to a model. The stub reads these
 # lists and still forwards the question, which is what the database matches on.
 TABLE_SCHEMAS: tuple[dict[str, Any], ...] = (
