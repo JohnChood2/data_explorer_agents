@@ -1,7 +1,8 @@
 """AI server.
 
-Accepts a question from the backend, asks the database for rows, and returns
-a result string. This is a dummy stand-in for the data-explorer agent.
+Accepts a question from the backend and runs the data explorer graph.
+The graph reads the question, writes a query, asks the database for rows,
+and returns a result string.
 Run from the repo root:
 
     uv run python -m data_explorer_agents.ai.app
@@ -11,13 +12,13 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Sequence
 from typing import Any
 
-import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from data_explorer_agents.agents import ExplorerContext, ExplorerError, explorer_graph
 
 logger = logging.getLogger(__name__)
 
@@ -53,35 +54,11 @@ class AskResponse(BaseModel):
     path: list[str]
 
 
-def format_result(question: str, rows: Sequence[DatasetRow]) -> str:
-    if not rows:
-        return f"No datasets matched {question!r}."
-    noun = "dataset" if len(rows) == 1 else "datasets"
-    details = "; ".join(
-        f"{row.name} ({row.row_count} rows): {row.description}" for row in rows
-    )
-    return f"Found {len(rows)} {noun} for {question!r}. {details}"
-
-
 def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
     raw = payload.get("path", fallback)
     if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
         return [*raw, "ai"]
     return [*fallback, "ai"]
-
-
-async def _query_database(question: str, path: list[str]) -> dict[str, Any]:
-    url = f"{DATABASE_URL}/query"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json={"question": question, "path": path})
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"database call failed: {exc}") from exc
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="database returned a non-object")
-    return payload
 
 
 app = FastAPI(title="AI server", version="0.1.0")
@@ -96,21 +73,30 @@ def health() -> dict[str, str]:
 async def ask(body: AskRequest) -> AskResponse:
     path = [*body.path, "ai"]
     logger.info("ask question=%r path=%s", body.question, path)
-    payload = await _query_database(body.question, path)
-    raw_rows = payload.get("rows")
+    try:
+        output = await explorer_graph.ainvoke(
+            {"question": body.question, "path": path},
+            context=ExplorerContext(database_url=DATABASE_URL),
+        )
+    except ExplorerError as exc:
+        raise HTTPException(status_code=502, detail=exc.detail) from exc
+    raw_rows = output.get("rows")
     if not isinstance(raw_rows, list):
         raise HTTPException(status_code=502, detail="database response missing rows")
     try:
         rows = [DatasetRow.model_validate(row) for row in raw_rows]
     except ValidationError as exc:
         raise HTTPException(status_code=502, detail="database returned invalid rows") from exc
-    result = format_result(body.question, rows)
-    logger.info("result question=%r path=%s", body.question, _path(payload, path))
+    result = output.get("result")
+    if not isinstance(result, str):
+        raise HTTPException(status_code=502, detail="explorer graph returned no result")
+    returned_path = _path(output, path)
+    logger.info("result question=%r path=%s", body.question, returned_path)
     return AskResponse(
         question=body.question,
         result=result,
         rows=rows,
-        path=_path(payload, path),
+        path=returned_path,
     )
 
 

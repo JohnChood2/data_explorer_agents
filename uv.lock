@@ -190,6 +190,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langchain" },
+    { name = "langgraph" },
     { name = "uvicorn" },
 ]
 
@@ -198,6 +199,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.149.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain", specifier = ">=1.4.6" },
+    { name = "langgraph", specifier = ">=1.2.16" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
