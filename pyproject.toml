@@ -7,7 +7,12 @@ authors = [
     { name = "John C. Hood II", email = "hood.astro@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.149.0",
+    "httpx>=0.28.1",
+    "langchain>=1.4.6",
+    "uvicorn>=0.54.0",
+]
 
 [project.scripts]
 data-explorer-agents = "data_explorer_agents:main"
