@@ -12,7 +12,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -38,11 +37,6 @@ class AskRequest(BaseModel):
         description="Natural-language question. Leading and trailing space is removed.",
         examples=["Which datasets contain galaxies?"],
     )
-    path: list[str] = Field(
-        default_factory=list,
-        description="Services that already handled this request, in order.",
-        examples=[["ui", "backend"]],
-    )
 
     @field_validator("question")
     @classmethod
@@ -57,10 +51,6 @@ class AskResponse(BaseModel):
     question: str = Field(description="Question after trimming.")
     result: str = Field(description="One sentence describing the matching rows.")
     rows: list[DatasetRow] = Field(description="Datasets returned by the database query tool.")
-    path: list[str] = Field(
-        description="Services that handled the question, including the return trip through this server.",
-        examples=[["ui", "backend", "ai", "database", "ai"]],
-    )
 
 
 class HealthResponse(BaseModel):
@@ -71,20 +61,12 @@ class ErrorResponse(BaseModel):
     detail: str = Field(description="Why the request failed.")
 
 
-def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
-    raw = payload.get("path", fallback)
-    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-        return [*raw, "ai"]
-    return [*fallback, "ai"]
-
-
 app = FastAPI(
     title="AI server",
     version="0.1.0",
     description=(
         "Runs the data explorer graph for one question. "
-        "POST /ask appends ai to path, calls the database MCP query tool, "
-        "and returns one result sentence plus the matching rows."
+        "POST /ask runs the explorer graph and returns its result sentence and rows."
     ),
 )
 
@@ -107,12 +89,10 @@ def health() -> HealthResponse:
     },
 )
 async def ask(body: AskRequest) -> AskResponse:
-    """Append ``ai`` to ``path``, run ``explorer_graph``, and append ``ai`` again on the way back."""
-    path = [*body.path, "ai"]
-    logger.info("ask question=%r path=%s", body.question, path)
+    """Run ``explorer_graph`` and return its result sentence and rows."""
     try:
         output = await explorer_graph.ainvoke(
-            {"question": body.question, "path": path},
+            {"question": body.question},
             context=ExplorerContext(database_url=config.ai.database_url),
         )
     except ExplorerError as exc:
@@ -127,14 +107,8 @@ async def ask(body: AskRequest) -> AskResponse:
     result = output.get("result")
     if not isinstance(result, str):
         raise HTTPException(status_code=502, detail="explorer graph returned no result")
-    returned_path = _path(output, path)
-    logger.info("result question=%r path=%s", body.question, returned_path)
-    return AskResponse(
-        question=body.question,
-        result=result,
-        rows=rows,
-        path=returned_path,
-    )
+    logger.info("result question=%r", body.question)
+    return AskResponse(question=body.question, result=result, rows=rows)
 
 
 def main() -> None:

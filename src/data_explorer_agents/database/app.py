@@ -96,11 +96,6 @@ class QueryRequest(BaseModel):
         description="Natural-language question. Leading and trailing space is removed.",
         examples=["Which datasets contain galaxies?"],
     )
-    path: list[str] = Field(
-        default_factory=list,
-        description="Services that already handled this request, in order.",
-        examples=[["ui", "backend", "ai"]],
-    )
 
     @field_validator("question")
     @classmethod
@@ -118,10 +113,6 @@ class QueryResponse(BaseModel):
             "Matching datasets. A question with no content words returns every dataset. "
             "A question whose content words match nothing returns an empty list."
         )
-    )
-    path: list[str] = Field(
-        description="Services that handled the question, with database appended.",
-        examples=[["ui", "backend", "ai", "database"]],
     )
 
 
@@ -153,12 +144,11 @@ def matching_rows(question: str) -> list[DatasetRow]:
     ]
 
 
-def execute_query(question: str, path: list[str]) -> QueryResponse:
-    """Match rows and append this service to the path."""
-    traveled = [*path, "database"]
+def execute_query(question: str) -> QueryResponse:
+    """Return the rows that match the question."""
     rows = matching_rows(question)
-    logger.info("query question=%r matches=%s path=%s", question, len(rows), traveled)
-    return QueryResponse(question=question, rows=rows, path=traveled)
+    logger.info("query question=%r matches=%s", question, len(rows))
+    return QueryResponse(question=question, rows=rows)
 
 
 mcp = FastMCP(
@@ -171,8 +161,8 @@ mcp = FastMCP(
 
 
 @mcp.tool(name="query", description=QUERY_TOOL_DESCRIPTION)
-def query_datasets(question: str, path: list[str]) -> QueryResponse:
-    return execute_query(question, path)
+def query_datasets(question: str) -> QueryResponse:
+    return execute_query(question)
 
 
 mcp_app = mcp.streamable_http_app()
@@ -205,8 +195,8 @@ def health() -> HealthResponse:
 
 @app.post("/query", response_model=QueryResponse, summary="Match datasets to a question")
 def query(body: QueryRequest) -> QueryResponse:
-    """Append ``database`` to ``path`` and return the rows that match the question."""
-    return execute_query(body.question, body.path)
+    """Return the rows that match the question."""
+    return execute_query(body.question)
 
 
 app.mount("/mcp", mcp_app)

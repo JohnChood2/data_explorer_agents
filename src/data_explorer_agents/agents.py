@@ -39,7 +39,6 @@ EXAMPLE_QUERIES: tuple[str, ...] = (
 
 class ExplorerState(TypedDict, total=False):
     question: str
-    path: list[str]
     query: str
     rows: list[dict[str, Any]]
     result: str
@@ -135,7 +134,7 @@ async def run_query(
 ) -> dict[str, Any]:
     """Run the query by calling the database MCP ``query`` tool.
 
-    The tool result is passed through as the rows and the path.
+    The tool result is passed through as the rows.
     """
     url = f"{runtime.context.database_url.rstrip('/')}/mcp/"
     client = MultiServerMCPClient(
@@ -151,17 +150,13 @@ async def run_query(
         query_tool = next((tool for tool in tools if tool.name == "query"), None)
         if query_tool is None:
             raise ExplorerError("database call failed: query tool is not available")
-        result = await query_tool.ainvoke(
-            {"question": state["query"], "path": state["path"]}
-        )
+        result = await query_tool.ainvoke({"question": state["query"]})
     except ExplorerError:
         raise
     except Exception as exc:
         raise ExplorerError(f"database call failed: {exc}") from exc
     payload = _pass_through(result)
-    raw_path = payload.get("path", state["path"])
-    path = raw_path if isinstance(raw_path, list) else state["path"]
-    return {"rows": _rows(payload.get("rows")), "path": path}
+    return {"rows": _rows(payload.get("rows"))}
 
 
 def analyze_data(state: ExplorerState) -> dict[str, str]:

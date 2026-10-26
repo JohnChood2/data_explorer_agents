@@ -41,10 +41,6 @@ class SearchRequest(BaseModel):
         description="Natural-language question. Leading and trailing space is removed.",
         examples=["Which datasets contain galaxies?"],
     )
-    path: list[str] = Field(
-        default_factory=list,
-        description="Services that already handled this request, in order. Usually empty.",
-    )
 
     @field_validator("question")
     @classmethod
@@ -59,10 +55,6 @@ class SearchResponse(BaseModel):
     question: str = Field(description="Question after trimming.")
     result: str = Field(description="One sentence describing the matching rows.")
     rows: list[DatasetRow] = Field(description="Datasets that matched the question.")
-    path: list[str] = Field(
-        description="Services that handled the question, including the return trip.",
-        examples=[["ui", "backend", "ai", "database", "ai", "backend", "ui"]],
-    )
 
 
 class HealthResponse(BaseModel):
@@ -73,18 +65,11 @@ class ErrorResponse(BaseModel):
     detail: str = Field(description="Why the request failed.")
 
 
-def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
-    raw = payload.get("path", fallback)
-    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-        return [*raw, "ui"]
-    return [*fallback, "ui"]
-
-
-async def _search_backend(question: str, path: list[str]) -> dict[str, Any]:
+async def _search_backend(question: str) -> dict[str, Any]:
     url = f"{config.backend.url}/search"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json={"question": question, "path": path})
+            response = await client.post(url, json={"question": question})
             response.raise_for_status()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"backend call failed: {exc}") from exc
@@ -99,7 +84,7 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "Browser page for asking a question about the catalogs. "
-        "POST /search appends ui to path and forwards the question to the backend."
+        "POST /search forwards the question to the backend and returns its result."
     ),
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -128,14 +113,14 @@ def index() -> FileResponse:
     },
 )
 async def search(body: SearchRequest) -> SearchResponse:
-    """Append ``ui`` to ``path`` and return the backend result with ``ui`` appended again."""
-    path = [*body.path, "ui"]
-    logger.info("search question=%r path=%s", body.question, path)
-    payload = await _search_backend(body.question, path)
+    """Forward the question and return the backend result."""
+    payload = await _search_backend(body.question)
     try:
-        return SearchResponse.model_validate({**payload, "path": _path(payload, path)})
+        response = SearchResponse.model_validate(payload)
     except ValidationError as exc:
         raise HTTPException(status_code=502, detail="backend returned an invalid result") from exc
+    logger.info("search question=%r", body.question)
+    return response
 
 
 def main() -> None:

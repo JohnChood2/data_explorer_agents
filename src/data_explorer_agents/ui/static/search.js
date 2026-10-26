@@ -20,7 +20,7 @@ form.addEventListener("submit", async (event) => {
     const rows = (body.rows || [])
       .map((row) => `• ${row.name} (${row.row_count} rows)`)
       .join("\n");
-    output.textContent = `${body.result}\n\n${rows}\n\npath: ${body.path.join(" → ")}`;
+    output.textContent = rows ? `${body.result}\n\n${rows}` : body.result;
   } catch (error) {
     output.textContent = error instanceof Error ? error.message : String(error);
   }

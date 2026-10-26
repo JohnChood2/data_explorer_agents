@@ -1,6 +1,6 @@
 # How the app servers work
 
-The search bar, the backend, the AI server, and the database are separate web apps. You start each app in its own process. You send a question from the search bar to the backend. The backend sends the question to the AI server, and the AI server sends the question to the database. The result comes back along the same path.
+The search bar, the backend, the AI server, and the database are separate web apps. You start each app in its own process. You send a question from the search bar to the backend. The backend sends the question to the AI server, and the AI server sends the question to the database. The result comes back through those same apps.
 
 ## Ports
 
@@ -33,7 +33,7 @@ The database splits the question into words of at least four letters, and it ign
 
 ## How a question travels
 
-The response includes a `path` list. The search bar appends `ui` before calling the backend. The backend appends `backend` before calling the AI server. The AI server appends `ai` before calling the database. The database appends `database` and returns the matching rows. The AI server, the backend, and the search bar each append their own name again while sending the result back. A complete path is `ui`, `backend`, `ai`, `database`, `ai`, `backend`, `ui`.
+The search bar calls the backend, the backend calls the AI server, and the AI server calls the database. Each app returns the result sentence and the matching rows. A successful search response means each of those calls returned a usable result.
 
 ## How to start the apps
 
