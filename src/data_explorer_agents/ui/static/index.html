@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Data explorer</title>
+  <style>
+    :root { color-scheme: light; }
+    body {
+      font-family: sans-serif;
+      max-width: 42rem;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #111;
+      background: #fff;
+    }
+    form { display: flex; gap: 0.5rem; }
+    input { flex: 1; font: inherit; padding: 0.5rem; color: #111; background: #fff; }
+    button { font: inherit; padding: 0.5rem 0.75rem; }
+    #output { white-space: pre-wrap; color: #111; }
+  </style>
+</head>
+<body>
+  <h1>Data explorer</h1>
+  <form id="search-form">
+    <input id="question" name="question" type="search" placeholder="Ask a question" required />
+    <button type="submit">Search</button>
+  </form>
+  <pre id="output"></pre>
+  <script src="/static/search.js" defer></script>
+</body>
+</html>

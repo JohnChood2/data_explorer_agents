@@ -1,6 +1,7 @@
 """Backend.
 
 Receives a question from the search bar and returns the AI server's result.
+Interactive API docs are at ``/docs``. The OpenAPI schema is at ``/openapi.json``.
 Run from the repo root:
 
     uv run python -m data_explorer_agents.backend.app
@@ -9,7 +10,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import httpx
@@ -17,23 +17,30 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-logger = logging.getLogger(__name__)
+from data_explorer_agents.utils.config import config
 
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("BACKEND_PORT", "8001"))
-AI_URL = os.environ.get("AI_URL", "http://127.0.0.1:8002").rstrip("/")
+logger = logging.getLogger(__name__)
 
 
 class DatasetRow(BaseModel):
-    id: str
-    name: str
-    row_count: int
-    description: str
+    id: str = Field(description="Stable catalog id.")
+    name: str = Field(description="Display name of the dataset.")
+    row_count: int = Field(description="Number of rows in the dataset.")
+    description: str = Field(description="What the dataset contains.")
 
 
 class SearchRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=500)
-    path: list[str] = Field(default_factory=list)
+    question: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Natural-language question. Leading and trailing space is removed.",
+        examples=["Which datasets contain galaxies?"],
+    )
+    path: list[str] = Field(
+        default_factory=list,
+        description="Services that already handled this request, in order.",
+        examples=[["ui"]],
+    )
 
     @field_validator("question")
     @classmethod
@@ -45,10 +52,21 @@ class SearchRequest(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    question: str
-    result: str
-    rows: list[DatasetRow]
-    path: list[str]
+    question: str = Field(description="Question after trimming.")
+    result: str = Field(description="One sentence describing the matching rows.")
+    rows: list[DatasetRow] = Field(description="Datasets that matched the question.")
+    path: list[str] = Field(
+        description="Services that handled the question, including the return trip.",
+        examples=[["ui", "backend", "ai", "database", "ai", "backend"]],
+    )
+
+
+class HealthResponse(BaseModel):
+    service: str = Field(description="Name of this process.", examples=["backend"])
+
+
+class ErrorResponse(BaseModel):
+    detail: str = Field(description="Why the request failed.")
 
 
 def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
@@ -59,7 +77,7 @@ def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
 
 
 async def _ask_ai(question: str, path: list[str]) -> dict[str, Any]:
-    url = f"{AI_URL}/ask"
+    url = f"{config.ai.url}/ask"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json={"question": question, "path": path})
@@ -72,16 +90,35 @@ async def _ask_ai(question: str, path: list[str]) -> dict[str, Any]:
     return payload
 
 
-app = FastAPI(title="Backend", version="0.1.0")
+app = FastAPI(
+    title="Backend",
+    version="0.1.0",
+    description=(
+        "Receives a question from the search bar. "
+        "POST /search appends backend to path and forwards the question to the AI server."
+    ),
+)
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"service": "backend"}
+@app.get("/health", response_model=HealthResponse, summary="Liveness check")
+def health() -> HealthResponse:
+    """Report that this process is the backend."""
+    return HealthResponse(service="backend")
 
 
-@app.post("/search", response_model=SearchResponse)
+@app.post(
+    "/search",
+    response_model=SearchResponse,
+    summary="Forward a question to the AI server",
+    responses={
+        502: {
+            "model": ErrorResponse,
+            "description": "The AI server was unreachable or returned a payload this app could not use.",
+        }
+    },
+)
 async def search(body: SearchRequest) -> SearchResponse:
+    """Append ``backend`` to ``path`` and return the AI result with ``backend`` appended again."""
     path = [*body.path, "backend"]
     logger.info("search question=%r path=%s", body.question, path)
     payload = await _ask_ai(body.question, path)
@@ -93,7 +130,7 @@ async def search(body: SearchRequest) -> SearchResponse:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host=config.backend.host, port=config.backend.port)
 
 
 if __name__ == "__main__":

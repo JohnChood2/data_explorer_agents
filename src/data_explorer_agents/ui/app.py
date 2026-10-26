@@ -1,6 +1,7 @@
 """Search bar.
 
 Serves the search page and forwards each question to the backend.
+Interactive API docs are at ``/docs``. The OpenAPI schema is at ``/openapi.json``.
 Run from the repo root:
 
     uv run python -m data_explorer_agents.ui.app
@@ -9,86 +10,41 @@ Run from the repo root:
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 from typing import Any
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from data_explorer_agents.utils.config import config
 
 logger = logging.getLogger(__name__)
 
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("UI_PORT", "8000"))
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
-
-PAGE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Data explorer</title>
-  <style>
-    :root { color-scheme: light; }
-    body {
-      font-family: sans-serif;
-      max-width: 42rem;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      color: #111;
-      background: #fff;
-    }
-    form { display: flex; gap: 0.5rem; }
-    input { flex: 1; font: inherit; padding: 0.5rem; color: #111; background: #fff; }
-    button { font: inherit; padding: 0.5rem 0.75rem; }
-    #output { white-space: pre-wrap; color: #111; }
-  </style>
-</head>
-<body>
-  <h1>Data explorer</h1>
-  <form id="search-form">
-    <input id="question" name="question" type="search" placeholder="Ask a question" required />
-    <button type="submit">Search</button>
-  </form>
-  <pre id="output"></pre>
-  <script>
-    const form = document.getElementById("search-form");
-    const output = document.getElementById("output");
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const question = document.getElementById("question").value;
-      output.textContent = "Searching…";
-      const response = await fetch("/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        output.textContent = typeof body.detail === "string" ? body.detail : JSON.stringify(body, null, 2);
-        return;
-      }
-      const rows = (body.rows || []).map((row) => "• " + row.name + " (" + row.row_count + " rows)").join("\\n");
-      output.textContent = body.result + "\\n\\n" + rows + "\\n\\npath: " + body.path.join(" → ");
-    });
-  </script>
-</body>
-</html>
-"""
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class DatasetRow(BaseModel):
-    id: str
-    name: str
-    row_count: int
-    description: str
+    id: str = Field(description="Stable catalog id.")
+    name: str = Field(description="Display name of the dataset.")
+    row_count: int = Field(description="Number of rows in the dataset.")
+    description: str = Field(description="What the dataset contains.")
 
 
 class SearchRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=500)
-    path: list[str] = Field(default_factory=list)
+    question: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Natural-language question. Leading and trailing space is removed.",
+        examples=["Which datasets contain galaxies?"],
+    )
+    path: list[str] = Field(
+        default_factory=list,
+        description="Services that already handled this request, in order. Usually empty.",
+    )
 
     @field_validator("question")
     @classmethod
@@ -100,10 +56,21 @@ class SearchRequest(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    question: str
-    result: str
-    rows: list[DatasetRow]
-    path: list[str]
+    question: str = Field(description="Question after trimming.")
+    result: str = Field(description="One sentence describing the matching rows.")
+    rows: list[DatasetRow] = Field(description="Datasets that matched the question.")
+    path: list[str] = Field(
+        description="Services that handled the question, including the return trip.",
+        examples=[["ui", "backend", "ai", "database", "ai", "backend", "ui"]],
+    )
+
+
+class HealthResponse(BaseModel):
+    service: str = Field(description="Name of this process.", examples=["ui"])
+
+
+class ErrorResponse(BaseModel):
+    detail: str = Field(description="Why the request failed.")
 
 
 def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
@@ -114,7 +81,7 @@ def _path(payload: dict[str, Any], fallback: list[str]) -> list[str]:
 
 
 async def _search_backend(question: str, path: list[str]) -> dict[str, Any]:
-    url = f"{BACKEND_URL}/search"
+    url = f"{config.backend.url}/search"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json={"question": question, "path": path})
@@ -127,21 +94,41 @@ async def _search_backend(question: str, path: list[str]) -> dict[str, Any]:
     return payload
 
 
-app = FastAPI(title="Search bar", version="0.1.0")
+app = FastAPI(
+    title="Search bar",
+    version="0.1.0",
+    description=(
+        "Browser page for asking a question about the catalogs. "
+        "POST /search appends ui to path and forwards the question to the backend."
+    ),
+)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"service": "ui"}
+@app.get("/health", response_model=HealthResponse, summary="Liveness check")
+def health() -> HealthResponse:
+    """Report that this process is the search bar."""
+    return HealthResponse(service="ui")
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return PAGE
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.post("/search", response_model=SearchResponse)
+@app.post(
+    "/search",
+    response_model=SearchResponse,
+    summary="Search the catalogs",
+    responses={
+        502: {
+            "model": ErrorResponse,
+            "description": "The backend was unreachable or returned a payload this app could not use.",
+        }
+    },
+)
 async def search(body: SearchRequest) -> SearchResponse:
+    """Append ``ui`` to ``path`` and return the backend result with ``ui`` appended again."""
     path = [*body.path, "ui"]
     logger.info("search question=%r path=%s", body.question, path)
     payload = await _search_backend(body.question, path)
@@ -153,7 +140,7 @@ async def search(body: SearchRequest) -> SearchResponse:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host=config.ui.host, port=config.ui.port)
 
 
 if __name__ == "__main__":

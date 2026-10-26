@@ -2,6 +2,8 @@
 
 The catalog is available as ``POST /query`` and as an MCP tool named ``query``
 at ``/mcp``. Both return the same rows.
+Interactive API docs for the HTTP routes are at ``/docs``.
+The OpenAPI schema is at ``/openapi.json``.
 Run from the repo root:
 
     uv run python -m data_explorer_agents.database.app
@@ -10,7 +12,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import logging
-import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,11 +22,9 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, field_validator
 
 from data_explorer_agents.prompts import DATABASE_MCP_INSTRUCTIONS, QUERY_TOOL_DESCRIPTION
+from data_explorer_agents.utils.config import config
 
 logger = logging.getLogger(__name__)
-
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("DATABASE_PORT", "8003"))
 _TOKEN = re.compile(r"[a-z0-9]+")
 _IGNORED = frozenset(
     {
@@ -62,10 +61,10 @@ _IGNORED = frozenset(
 
 
 class DatasetRow(BaseModel):
-    id: str
-    name: str
-    row_count: int
-    description: str
+    id: str = Field(description="Stable catalog id.")
+    name: str = Field(description="Display name of the dataset.")
+    row_count: int = Field(description="Number of rows in the dataset.")
+    description: str = Field(description="What the dataset contains.")
 
 
 DATASETS: tuple[DatasetRow, ...] = (
@@ -91,8 +90,17 @@ DATASETS: tuple[DatasetRow, ...] = (
 
 
 class QueryRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=500)
-    path: list[str] = Field(default_factory=list)
+    question: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Natural-language question. Leading and trailing space is removed.",
+        examples=["Which datasets contain galaxies?"],
+    )
+    path: list[str] = Field(
+        default_factory=list,
+        description="Services that already handled this request, in order.",
+        examples=[["ui", "backend", "ai"]],
+    )
 
     @field_validator("question")
     @classmethod
@@ -104,9 +112,21 @@ class QueryRequest(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    question: str
-    rows: list[DatasetRow]
-    path: list[str]
+    question: str = Field(description="Question after trimming.")
+    rows: list[DatasetRow] = Field(
+        description=(
+            "Matching datasets. A question with no content words returns every dataset. "
+            "A question whose content words match nothing returns an empty list."
+        )
+    )
+    path: list[str] = Field(
+        description="Services that handled the question, with database appended.",
+        examples=[["ui", "backend", "ai", "database"]],
+    )
+
+
+class HealthResponse(BaseModel):
+    service: str = Field(description="Name of this process.", examples=["database"])
 
 
 def _tokens(text: str) -> set[str]:
@@ -164,16 +184,28 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
 
 
-app = FastAPI(title="Database", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Database",
+    version="0.1.0",
+    description=(
+        "In-memory catalog of three datasets. "
+        "POST /query returns the rows whose name or description matches the question. "
+        "The MCP server at /mcp exposes the same match as a tool named query. "
+        "That tool is not part of this OpenAPI schema."
+    ),
+    lifespan=lifespan,
+)
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"service": "database"}
+@app.get("/health", response_model=HealthResponse, summary="Liveness check")
+def health() -> HealthResponse:
+    """Report that this process is the database."""
+    return HealthResponse(service="database")
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query", response_model=QueryResponse, summary="Match datasets to a question")
 def query(body: QueryRequest) -> QueryResponse:
+    """Append ``database`` to ``path`` and return the rows that match the question."""
     return execute_query(body.question, body.path)
 
 
@@ -182,7 +214,7 @@ app.mount("/mcp", mcp_app)
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host=config.database.host, port=config.database.port)
 
 
 if __name__ == "__main__":

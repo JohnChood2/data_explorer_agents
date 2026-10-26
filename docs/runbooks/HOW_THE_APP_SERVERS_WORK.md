@@ -11,12 +11,7 @@ The search bar, the backend, the AI server, and the database are separate web ap
 | AI server | 8002 |
 | Database | 8003 |
 
-Each app is available only on 127.0.0.1, so only a program on your computer can call it. You can change a port, or the address of the next app, with an environment variable before you start that app.
-
-- `UI_PORT` sets the search bar port, and `BACKEND_URL` sets the backend address the search bar calls. The default backend address is `http://127.0.0.1:8001`.
-- `BACKEND_PORT` sets the backend port, and `AI_URL` sets the AI server address. The default AI server address is `http://127.0.0.1:8002`.
-- `AI_PORT` sets the AI server port, and `DATABASE_URL` sets the database address. The default database address is `http://127.0.0.1:8003`.
-- `DATABASE_PORT` sets the database port.
+Each app is available only on 127.0.0.1, so only a program on your computer can call it. Hosts, ports, and the database URL for each app are in `src/data_explorer_agents/config.yaml`. The search bar calls the backend host and port. The backend calls the AI server host and port. The AI server calls the database URL in the `ai` section. That URL is `http://127.0.0.1:8003`.
 
 To check that the apps are running, and that a question passes through all four, follow [How to verify the servers](HOW_TO_VERIFY_SERVERS.md).
 

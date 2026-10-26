@@ -356,6 +356,7 @@ dependencies = [
     { name = "langchain-mcp-adapters" },
     { name = "langgraph" },
     { name = "mcp" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 
@@ -367,6 +368,7 @@ requires-dist = [
     { name = "langchain-mcp-adapters", specifier = ">=0.3.2" },
     { name = "langgraph", specifier = ">=1.2.16" },
     { name = "mcp", specifier = ">=1.30.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
