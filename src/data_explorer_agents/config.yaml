@@ -1,0 +1,16 @@
+ai:
+  host: 127.0.0.1
+  port: 8002
+  database_url: http://127.0.0.1:8003
+backend:
+  host: 127.0.0.1
+  port: 8001
+  database_url: http://127.0.0.1:8003
+database:
+  host: 127.0.0.1
+  port: 8003
+  database_url: http://127.0.0.1:8003
+ui:
+  host: 127.0.0.1
+  port: 8000
+  database_url: http://127.0.0.1:8003
