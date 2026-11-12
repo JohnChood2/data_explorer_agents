@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
+import httpx
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -77,11 +78,11 @@ def question_to_query(state: ExplorerState) -> dict[str, str]:
 
 def _rows(raw: object) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
-        raise ExplorerError("database response missing rows")
+        raise ExplorerError("database tool result has no rows list")
     rows: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
-            raise ExplorerError("database returned invalid rows")
+            raise ExplorerError(f"database returned a row that is not an object: {item!r}")
         try:
             rows.append(
                 {
@@ -92,7 +93,7 @@ def _rows(raw: object) -> list[dict[str, Any]]:
                 }
             )
         except KeyError as exc:
-            raise ExplorerError("database returned invalid rows") from exc
+            raise ExplorerError(f"database row is missing field {exc}") from exc
     return rows
 
 
@@ -123,10 +124,29 @@ def _pass_through(result: object) -> dict[str, Any]:
     try:
         payload = json.loads(_tool_text(result))
     except json.JSONDecodeError as exc:
-        raise ExplorerError("database returned a non-object") from exc
+        raise ExplorerError("database tool result is not valid JSON") from exc
     if not isinstance(payload, dict):
-        raise ExplorerError("database returned a non-object")
+        raise ExplorerError("database tool result is not a JSON object")
     return payload
+
+
+def _leaf_errors(exc: BaseException) -> list[BaseException]:
+    """Unwrap exception groups, which the MCP client raises around the real error."""
+    if isinstance(exc, BaseExceptionGroup):
+        return [leaf for inner in exc.exceptions for leaf in _leaf_errors(inner)]
+    return [exc]
+
+
+def _describe_failure(exc: BaseException, url: str) -> str:
+    """Say what went wrong in the database call, naming the URL when it matters."""
+    leaf = _leaf_errors(exc)[0]
+    if isinstance(leaf, httpx.ConnectError):
+        return f"database unreachable at {url}: connection refused or host not found, is the database app running?"
+    if isinstance(leaf, httpx.TimeoutException):
+        return f"database timed out at {url}"
+    if isinstance(leaf, httpx.HTTPStatusError):
+        return f"database at {url} returned HTTP {leaf.response.status_code}"
+    return f"database call failed ({type(leaf).__name__}): {leaf}"
 
 
 async def run_query(
@@ -149,12 +169,12 @@ async def run_query(
         tools = await client.get_tools(server_name="database")
         query_tool = next((tool for tool in tools if tool.name == "query"), None)
         if query_tool is None:
-            raise ExplorerError("database call failed: query tool is not available")
+            raise ExplorerError(f"database at {url} has no tool named query")
         result = await query_tool.ainvoke({"question": state["query"]})
     except ExplorerError:
         raise
     except Exception as exc:
-        raise ExplorerError(f"database call failed: {exc}") from exc
+        raise ExplorerError(_describe_failure(exc, url)) from exc
     payload = _pass_through(result)
     return {"rows": _rows(payload.get("rows"))}
 
